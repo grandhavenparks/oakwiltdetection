@@ -167,10 +167,12 @@ def generate_geojson(results):
         json.dump(geojson, f, indent=2)
     return path
 
-
 def render_results(results):
     for i, result in enumerate(results):
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+
+        if result["classification"] not in CLASSIFICATION_CATEGORIES:
+            result["classification"] = "Not an Oak Wilt"
 
         with col1:
             st.image(result["img_bytes"], caption=result["filename"], use_container_width=True)
