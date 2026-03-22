@@ -14,7 +14,7 @@ import pandas as pd
 # ===========================
 # CONFIG
 # ===========================
-MODEL_PATH = os.getenv("OAK_WILT_MODEL_PATH", "models/oak_wilt_3.h5")
+MODEL_PATH = "src/oak_wilt_3.h5"
 
 CLASSIFICATION_CATEGORIES = {
     "THIS PICTURE HAS OAK WILT": {"min_conf": 99.5, "color": "#FF0000"},
