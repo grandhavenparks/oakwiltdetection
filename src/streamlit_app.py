@@ -33,7 +33,7 @@ MAX_UPLOAD = 75
 # ===========================
 st.set_page_config(layout="wide", page_title="Oak-Wilt Detector")
 st.title("Grand Haven Parks Oak-Wilt Detector")
-st.markdown("Advanced 4-category Oak Wilt classification system")
+st.markdown("Advanced 4-category Oak Wilt classification system | MAX UPLOADS: 75 Images")
 
 
 # ===========================
