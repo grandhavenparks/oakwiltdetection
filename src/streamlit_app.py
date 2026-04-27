@@ -135,8 +135,8 @@ def generate_csv(results):
             "filename": r["filename"],
             "classification": r["classification"],
             "confidence": r["confidence"],
-            "lat": r["gps"][0] if r["gps"] else "",
-            "lon": r["gps"][1] if r["gps"] else "",
+            "latitude": r["gps"][0] if r["gps"] else "",
+            "longitude": r["gps"][1] if r["gps"] else "",
         })
     df = pd.DataFrame(rows)
     os.makedirs(RESULTS_DIR, exist_ok=True)
