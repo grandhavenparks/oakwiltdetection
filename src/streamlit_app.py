@@ -1,5 +1,6 @@
 import os
 import io
+import hashlib
 import json
 from datetime import datetime
 import gc
@@ -24,8 +25,8 @@ CLASSIFICATION_CATEGORIES = {
 }
 
 IMG_SIZE = 256
-RESULTS_DIR = "results"
 MAX_UPLOAD = 75
+THUMB_WIDTH = 600
 
 
 # ===========================
@@ -34,6 +35,67 @@ MAX_UPLOAD = 75
 st.set_page_config(layout="wide", page_title="Oak-Wilt Detector")
 st.title("Grand Haven Parks Oak-Wilt Detector")
 st.markdown("Advanced 4-category Oak Wilt classification system | MAX UPLOADS: 75 Images")
+
+st.markdown("""
+<style>
+/* "Loading images..." spinner under the uploader while files upload */
+[data-testid="stFileUploader"]:has([role="progressbar"]) {
+    position: relative;
+    padding-bottom: 2.25rem;
+}
+[data-testid="stFileUploader"]:has([role="progressbar"])::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0.4rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    border: 3px solid rgba(128, 128, 128, 0.3);
+    border-top-color: #1E8E3E;
+    border-radius: 50%;
+    animation: upload-spin 0.8s linear infinite;
+}
+[data-testid="stFileUploader"]:has([role="progressbar"])::after {
+    content: "Loading images...";
+    position: absolute;
+    left: 1.8rem;
+    bottom: 0.35rem;
+    font-weight: 600;
+}
+@keyframes upload-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Green feedback message above the Good/Bad buttons */
+.fb-close {
+    display: none;
+}
+.fb-banner {
+    position: relative;
+    background: #1E8E3E;
+    color: #FFFFFF;
+    font-weight: bold;
+    border-radius: 0.5rem;
+    padding: 0.6rem 2rem 0.6rem 0.8rem;
+    margin-bottom: 0.5rem;
+    animation: fb-hide 0s 3s forwards;
+}
+.fb-x {
+    position: absolute;
+    top: 0.15rem;
+    right: 0.5rem;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1.2;
+}
+.fb-close:checked + .fb-banner {
+    display: none;
+}
+@keyframes fb-hide {
+    to { visibility: hidden; height: 0; padding: 0; margin: 0; overflow: hidden; }
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ===========================
@@ -59,8 +121,12 @@ model = load_model()
 # ===========================
 if "results" not in st.session_state:
     st.session_state.results = []
-if "processed_filenames" not in st.session_state:
-    st.session_state.processed_filenames = set()
+if "processed_ids" not in st.session_state:
+    st.session_state.processed_ids = set()
+if "failed_files" not in st.session_state:
+    st.session_state.failed_files = []
+if "feedback_count" not in st.session_state:
+    st.session_state.feedback_count = 0
 
 
 # ===========================
@@ -71,7 +137,7 @@ def classify_prediction(confidence):
     if confidence > 99.5:
         return "THIS PICTURE HAS OAK WILT"
     elif 90 < confidence <= 99.5:
-        return "HIGH CHANCE OF OAK WILTS"
+        return "HIGH CHANCE OF OAK WILT"
     elif 70 < confidence <= 90:
         return "CHANGES OF COLORS ON TREE LEAVES"
     else:
@@ -114,15 +180,24 @@ def process_image(img_bytes):
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("Invalid image")
+
+    # Small JPEG thumbnail for display; the full-size upload is never kept
+    h, w = img.shape[:2]
+    if w > THUMB_WIDTH:
+        thumb = cv2.resize(img, (THUMB_WIDTH, int(h * THUMB_WIDTH / w)), interpolation=cv2.INTER_AREA)
+    else:
+        thumb = img
+    _, thumb_buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    thumbnail_bytes = thumb_buf.tobytes()
+
     img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
     img = img.astype(np.float32) / 255.0
     img_input = np.expand_dims(img, axis=0)
-    prediction = model.predict(img_input, verbose=0)[0][0]
+    prediction = float(model(img_input, training=False)[0][0])
     classification = classify_prediction(prediction)
     gps = get_gps_data(img_bytes)
-    del img_array, img, img_input
-    gc.collect()
-    return classification, prediction * 100, gps
+    del img_array, img, img_input, thumb, thumb_buf
+    return classification, prediction * 100, gps, thumbnail_bytes
 
 
 def generate_csv(results):
@@ -138,11 +213,7 @@ def generate_csv(results):
             "latitude": r["gps"][0] if r["gps"] else "",
             "longitude": r["gps"][1] if r["gps"] else "",
         })
-    df = pd.DataFrame(rows)
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    path = os.path.join(RESULTS_DIR, f"oak_wilt_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    df.to_csv(path, index=False)
-    return path
+    return pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
 
 
 def generate_geojson(results):
@@ -161,11 +232,22 @@ def generate_geojson(results):
             },
             "geometry": {"type": "Point", "coordinates": [lon, lat]}
         })
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    path = os.path.join(RESULTS_DIR, f"oak_wilt_map_{datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson")
-    with open(path, "w") as f:
-        json.dump(geojson, f, indent=2)
-    return path
+    return json.dumps(geojson, indent=2).encode("utf-8")
+
+def feedback_banner(message, row):
+    # Alternate the outer tag on each click so the browser builds a fresh box,
+    # restarting the 3-second timer and clearing an earlier close click
+    tag = "section" if st.session_state.feedback_count % 2 else "div"
+    box_id = f"fb-close-{row}"
+    return (
+        f'<{tag}>'
+        f'<input type="checkbox" id="{box_id}" class="fb-close">'
+        f'<div class="fb-banner">{message}'
+        f'<label for="{box_id}" class="fb-x">&times;</label>'
+        f'</div>'
+        f'</{tag}>'
+    )
+
 
 def render_results(results):
     for i, result in enumerate(results):
@@ -175,7 +257,7 @@ def render_results(results):
             result["classification"] = "Not an Oak Wilt"
 
         with col1:
-            st.image(result["img_bytes"], caption=result["filename"], use_container_width=True)
+            st.image(result["thumbnail"], caption=result["filename"], width="stretch")
 
         with col2:
             st.write("**Classification**")
@@ -186,7 +268,7 @@ def render_results(results):
             )
 
         with col3:
-            st.write("**Probability of OW**")
+            st.write("**Confidence of OW**")
             st.write(f"{result['confidence']:.2f}%")
 
         with col4:
@@ -198,13 +280,22 @@ def render_results(results):
 
         with col5:
             st.write("**Feedback**")
+            feedback_msg = st.empty()
             col_good, col_bad = st.columns(2)
             with col_good:
-                if st.button("Good", key=f"good_{i}_{result['filename']}", help="Correct prediction"):
-                    st.toast("Thanks! Prediction was correct.")
+                if st.button("Good", key=f"good_{result['id']}", help="Correct prediction"):
+                    st.session_state.feedback_count += 1
+                    feedback_msg.markdown(
+                        feedback_banner("Thanks! Prediction was correct.", i),
+                        unsafe_allow_html=True
+                    )
             with col_bad:
-                if st.button("Bad", key=f"bad_{i}_{result['filename']}", help="Incorrect prediction"):
-                    st.toast("Thanks! Prediction was incorrect.")
+                if st.button("Bad", key=f"bad_{result['id']}", help="Incorrect prediction"):
+                    st.session_state.feedback_count += 1
+                    feedback_msg.markdown(
+                        feedback_banner("Thanks! Prediction was incorrect.", i),
+                        unsafe_allow_html=True
+                    )
 
         st.markdown("---")
 
@@ -240,38 +331,53 @@ if files:
         st.error(f"Cannot upload more than {MAX_UPLOAD} images. Please select fewer images.")
         st.stop()
 
-    # Deduplicate
-    seen = set()
-    unique_files = []
+    # Deduplicate by content, so different photos that share a filename are all kept
+    unique_files = {}
     for f in files:
-        if f.name not in seen:
-            seen.add(f.name)
-            unique_files.append(f)
+        unique_files.setdefault(hashlib.md5(f.getvalue()).hexdigest(), f)
 
     # Only re-process if the uploaded file set has changed
-    uploaded_names = {f.name for f in unique_files}
-    if uploaded_names != st.session_state.processed_filenames:
+    uploaded_ids = set(unique_files)
+    if uploaded_ids != st.session_state.processed_ids:
         st.session_state.results = []
-        st.session_state.processed_filenames = uploaded_names
+        st.session_state.failed_files = []
+        st.session_state.processed_ids = uploaded_ids
 
         progress = st.progress(0)
 
         with st.spinner("Analyzing images..."):
-            for i, file in enumerate(unique_files):
-                img_bytes = file.read()
-                classification, confidence, gps = process_image(img_bytes)
+            for i, (file_id, file) in enumerate(unique_files.items()):
+                img_bytes = file.getvalue()
+                try:
+                    classification, confidence, gps, thumbnail = process_image(img_bytes)
+                except Exception:
+                    st.session_state.failed_files.append(file.name)
+                    progress.progress((i + 1) / len(unique_files))
+                    continue
                 st.session_state.results.append({
+                    "id": file_id,
                     "filename": file.name,
-                    "img_bytes": img_bytes,
+                    "thumbnail": thumbnail,
                     "classification": classification,
                     "confidence": confidence,
                     "gps": gps
                 })
                 progress.progress((i + 1) / len(unique_files))
                 del img_bytes
-                gc.collect()
 
+        gc.collect()
         progress.empty()
+else:
+    # Uploads cleared: drop the previous batch
+    st.session_state.results = []
+    st.session_state.failed_files = []
+    st.session_state.processed_ids = set()
+
+if st.session_state.failed_files:
+    st.warning(
+        "Could not read these images, so they were skipped: "
+        + ", ".join(st.session_state.failed_files)
+    )
 
 if st.session_state.results:
     results = st.session_state.results
@@ -291,26 +397,27 @@ if st.session_state.results:
 
     # Export
     st.subheader("Export Results")
-    csv_path = generate_csv(results)
-    geojson_path = generate_geojson(results)
+    csv_data = generate_csv(results)
+    geojson_data = generate_geojson(results)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # Stacked download buttons
-    if csv_path:
+    if csv_data:
         st.download_button(
             "Download CSV",
-            data=open(csv_path, "rb").read(),
-            file_name=os.path.basename(csv_path),
+            data=csv_data,
+            file_name=f"oak_wilt_results_{timestamp}.csv",
             mime="text/csv",
             key="dl_csv"
         )
     else:
         st.button("Download CSV", disabled=True, key="dl_csv_disabled")
 
-    if geojson_path:
+    if geojson_data:
         st.download_button(
             "Download GeoJSON",
-            data=open(geojson_path, "rb").read(),
-            file_name=os.path.basename(geojson_path),
+            data=geojson_data,
+            file_name=f"oak_wilt_map_{timestamp}.geojson",
             mime="application/geo+json",
             key="dl_geo"
         )
