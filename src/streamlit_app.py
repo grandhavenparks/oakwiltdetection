@@ -87,8 +87,16 @@ st.markdown("""
     line-height: 1;
     background: rgba(255, 255, 255, 0.85);
 }
+/* Black arrow in every theme and state, so it shows on the white square */
+[class*="st-key-enlarge_"] button,
+[class*="st-key-enlarge_"] button:hover,
+[class*="st-key-enlarge_"] button:focus,
+[class*="st-key-enlarge_"] button:active,
+[class*="st-key-enlarge_"] button * {
+    color: #000000 !important;
+}
 
-/* Green feedback message below the Good/Bad buttons. It sits in the empty
+/* Feedback message (green, or red for "incorrect") below the Good/Bad buttons. It sits in the empty
    space beside the image and hides without collapsing, so nothing moves */
 .fb-close {
     display: none;
@@ -101,6 +109,9 @@ st.markdown("""
     border-radius: 0.5rem;
     padding: 0.6rem 2rem 0.6rem 0.8rem;
     animation: fb-hide 0s 3s forwards;
+}
+.fb-banner.fb-bad {
+    background: #D93025;
 }
 .fb-x {
     position: absolute;
@@ -256,7 +267,7 @@ def generate_geojson(results):
         })
     return json.dumps(geojson, indent=2).encode("utf-8")
 
-def feedback_banner(message, row):
+def feedback_banner(message, row, bad=False):
     # Alternate the outer tag on each click so the browser builds a fresh box,
     # restarting the 3-second timer and clearing an earlier close click
     tag = "section" if st.session_state.feedback_count % 2 else "div"
@@ -264,16 +275,20 @@ def feedback_banner(message, row):
     return (
         f'<{tag}>'
         f'<input type="checkbox" id="{box_id}" class="fb-close">'
-        f'<div class="fb-banner">{message}'
+        f'<div class="fb-banner{" fb-bad" if bad else ""}">{message}'
         f'<label for="{box_id}" class="fb-x">&times;</label>'
         f'</div>'
         f'</{tag}>'
     )
 
 
-@st.dialog("Image", width="large")
 def show_enlarged(result):
-    st.image(result["thumbnail"], caption=result["filename"], width="stretch")
+    # Dialog titles are fixed when decorated, so wrap per call to title it with the filename
+    @st.dialog(result["filename"], width="large")
+    def enlarged():
+        st.image(result["thumbnail"], width="stretch")
+
+    enlarged()
 
 
 def render_results(results):
@@ -286,7 +301,7 @@ def render_results(results):
         with col1:
             with st.container(key=f"thumb_{result['id']}"):
                 st.image(result["thumbnail"], caption=result["filename"], width="stretch")
-                if st.button("", icon=":material/open_in_full:", key=f"enlarge_{result['id']}", help="Enlarge"):
+                if st.button("", icon=":material/open_in_full:", key=f"enlarge_{result['id']}"):
                     show_enlarged(result)
 
         with col2:
@@ -304,7 +319,8 @@ def render_results(results):
         with col4:
             st.write("**Coordinates**")
             if result["gps"]:
-                st.write(f"{result['gps'][0]:.5f}, {result['gps'][1]:.5f}")
+                # Code block for its built-in copy button
+                st.code(f"{result['gps'][0]:.5f}, {result['gps'][1]:.5f}", language=None)
             else:
                 st.write("No GPS")
 
@@ -324,7 +340,7 @@ def render_results(results):
                 if st.button("Bad", key=f"bad_{result['id']}", help="Incorrect prediction"):
                     st.session_state.feedback_count += 1
                     feedback_msg.markdown(
-                        feedback_banner("Thanks! Prediction was incorrect.", i),
+                        feedback_banner("Thanks! Prediction was incorrect.", i, bad=True),
                         unsafe_allow_html=True
                     )
 
