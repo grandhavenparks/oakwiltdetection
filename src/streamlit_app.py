@@ -66,33 +66,17 @@ st.markdown("""
     to { transform: rotate(360deg); }
 }
 
-/* Green feedback message above the Good/Bad buttons */
-.fb-close {
+/* Hide Streamlit's built-in image fullscreen button; it opens scrolled off-screen.
+   The "Enlarge" button below each image opens a dialog instead */
+[data-testid="stElementToolbar"] {
     display: none;
 }
-.fb-banner {
-    position: relative;
+
+/* Green feedback toast (top right of the screen) */
+[data-testid="stToast"] {
     background: #1E8E3E;
     color: #FFFFFF;
     font-weight: bold;
-    border-radius: 0.5rem;
-    padding: 0.6rem 2rem 0.6rem 0.8rem;
-    margin-bottom: 0.5rem;
-    animation: fb-hide 0s 3s forwards;
-}
-.fb-x {
-    position: absolute;
-    top: 0.15rem;
-    right: 0.5rem;
-    cursor: pointer;
-    font-size: 1.1rem;
-    line-height: 1.2;
-}
-.fb-close:checked + .fb-banner {
-    display: none;
-}
-@keyframes fb-hide {
-    to { visibility: hidden; height: 0; padding: 0; margin: 0; overflow: hidden; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -125,8 +109,6 @@ if "processed_ids" not in st.session_state:
     st.session_state.processed_ids = set()
 if "failed_files" not in st.session_state:
     st.session_state.failed_files = []
-if "feedback_count" not in st.session_state:
-    st.session_state.feedback_count = 0
 
 
 # ===========================
@@ -234,23 +216,13 @@ def generate_geojson(results):
         })
     return json.dumps(geojson, indent=2).encode("utf-8")
 
-def feedback_banner(message, row):
-    # Alternate the outer tag on each click so the browser builds a fresh box,
-    # restarting the 3-second timer and clearing an earlier close click
-    tag = "section" if st.session_state.feedback_count % 2 else "div"
-    box_id = f"fb-close-{row}"
-    return (
-        f'<{tag}>'
-        f'<input type="checkbox" id="{box_id}" class="fb-close">'
-        f'<div class="fb-banner">{message}'
-        f'<label for="{box_id}" class="fb-x">&times;</label>'
-        f'</div>'
-        f'</{tag}>'
-    )
+@st.dialog("Image", width="large")
+def show_enlarged(result):
+    st.image(result["thumbnail"], caption=result["filename"], width="stretch")
 
 
 def render_results(results):
-    for i, result in enumerate(results):
+    for result in results:
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
 
         if result["classification"] not in CLASSIFICATION_CATEGORIES:
@@ -258,6 +230,8 @@ def render_results(results):
 
         with col1:
             st.image(result["thumbnail"], caption=result["filename"], width="stretch")
+            if st.button("Enlarge", key=f"enlarge_{result['id']}"):
+                show_enlarged(result)
 
         with col2:
             st.write("**Classification**")
@@ -280,22 +254,13 @@ def render_results(results):
 
         with col5:
             st.write("**Feedback**")
-            feedback_msg = st.empty()
             col_good, col_bad = st.columns(2)
             with col_good:
                 if st.button("Good", key=f"good_{result['id']}", help="Correct prediction"):
-                    st.session_state.feedback_count += 1
-                    feedback_msg.markdown(
-                        feedback_banner("Thanks! Prediction was correct.", i),
-                        unsafe_allow_html=True
-                    )
+                    st.toast("Thanks! Prediction was correct.", duration=3)
             with col_bad:
                 if st.button("Bad", key=f"bad_{result['id']}", help="Incorrect prediction"):
-                    st.session_state.feedback_count += 1
-                    feedback_msg.markdown(
-                        feedback_banner("Thanks! Prediction was incorrect.", i),
-                        unsafe_allow_html=True
-                    )
+                    st.toast("Thanks! Prediction was incorrect.", duration=3)
 
         st.markdown("---")
 
