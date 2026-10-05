@@ -67,16 +67,54 @@ st.markdown("""
 }
 
 /* Hide Streamlit's built-in image fullscreen button; it opens scrolled off-screen.
-   The "Enlarge" button below each image opens a dialog instead */
+   The enlarge square on each image opens a dialog instead */
 [data-testid="stElementToolbar"] {
     display: none;
 }
+[class*="st-key-thumb_"] {
+    position: relative;
+}
+[class*="st-key-enlarge_"] {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: auto;
+    z-index: 1;
+}
+[class*="st-key-enlarge_"] button {
+    min-height: 0;
+    padding: 0.25rem;
+    line-height: 1;
+    background: rgba(255, 255, 255, 0.85);
+}
 
-/* Green feedback toast (top right of the screen) */
-[data-testid="stToast"] {
+/* Green feedback message below the Good/Bad buttons. It sits in the empty
+   space beside the image and hides without collapsing, so nothing moves */
+.fb-close {
+    display: none;
+}
+.fb-banner {
+    position: relative;
     background: #1E8E3E;
     color: #FFFFFF;
     font-weight: bold;
+    border-radius: 0.5rem;
+    padding: 0.6rem 2rem 0.6rem 0.8rem;
+    animation: fb-hide 0s 3s forwards;
+}
+.fb-x {
+    position: absolute;
+    top: 0.15rem;
+    right: 0.5rem;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1.2;
+}
+.fb-close:checked + .fb-banner {
+    visibility: hidden;
+}
+@keyframes fb-hide {
+    to { visibility: hidden; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -109,6 +147,8 @@ if "processed_ids" not in st.session_state:
     st.session_state.processed_ids = set()
 if "failed_files" not in st.session_state:
     st.session_state.failed_files = []
+if "feedback_count" not in st.session_state:
+    st.session_state.feedback_count = 0
 
 
 # ===========================
@@ -216,22 +256,38 @@ def generate_geojson(results):
         })
     return json.dumps(geojson, indent=2).encode("utf-8")
 
+def feedback_banner(message, row):
+    # Alternate the outer tag on each click so the browser builds a fresh box,
+    # restarting the 3-second timer and clearing an earlier close click
+    tag = "section" if st.session_state.feedback_count % 2 else "div"
+    box_id = f"fb-close-{row}"
+    return (
+        f'<{tag}>'
+        f'<input type="checkbox" id="{box_id}" class="fb-close">'
+        f'<div class="fb-banner">{message}'
+        f'<label for="{box_id}" class="fb-x">&times;</label>'
+        f'</div>'
+        f'</{tag}>'
+    )
+
+
 @st.dialog("Image", width="large")
 def show_enlarged(result):
     st.image(result["thumbnail"], caption=result["filename"], width="stretch")
 
 
 def render_results(results):
-    for result in results:
+    for i, result in enumerate(results):
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
 
         if result["classification"] not in CLASSIFICATION_CATEGORIES:
             result["classification"] = "Not an Oak Wilt"
 
         with col1:
-            st.image(result["thumbnail"], caption=result["filename"], width="stretch")
-            if st.button("Enlarge", key=f"enlarge_{result['id']}"):
-                show_enlarged(result)
+            with st.container(key=f"thumb_{result['id']}"):
+                st.image(result["thumbnail"], caption=result["filename"], width="stretch")
+                if st.button("", icon=":material/open_in_full:", key=f"enlarge_{result['id']}", help="Enlarge"):
+                    show_enlarged(result)
 
         with col2:
             st.write("**Classification**")
@@ -255,12 +311,22 @@ def render_results(results):
         with col5:
             st.write("**Feedback**")
             col_good, col_bad = st.columns(2)
+            # Message slot below the buttons, filled after they are drawn
+            feedback_msg = st.empty()
             with col_good:
                 if st.button("Good", key=f"good_{result['id']}", help="Correct prediction"):
-                    st.toast("Thanks! Prediction was correct.", duration=3)
+                    st.session_state.feedback_count += 1
+                    feedback_msg.markdown(
+                        feedback_banner("Thanks! Prediction was correct.", i),
+                        unsafe_allow_html=True
+                    )
             with col_bad:
                 if st.button("Bad", key=f"bad_{result['id']}", help="Incorrect prediction"):
-                    st.toast("Thanks! Prediction was incorrect.", duration=3)
+                    st.session_state.feedback_count += 1
+                    feedback_msg.markdown(
+                        feedback_banner("Thanks! Prediction was incorrect.", i),
+                        unsafe_allow_html=True
+                    )
 
         st.markdown("---")
 
